@@ -399,6 +399,22 @@ def load_and_initialize():
 # REST ENDPOINTS
 # -------------------------------------------------------------
 
+@app.get("/")
+def root():
+    return {
+        "service": "Danfoss Hydraulic Press Group 3 Intelligence API",
+        "status": "online",
+        "endpoints": {
+            "health": "/api/health",
+            "telemetry": "/api/telemetry",
+            "system_specs": "/api/system-specs",
+            "models_summary": "/api/models/summary",
+            "docs": "/docs"
+        }
+    }
+
+
+@app.get("/health")
 @app.get("/api/health")
 def health_check():
     return {
