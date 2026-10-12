@@ -22,7 +22,9 @@ import {
   RefreshCw
 } from 'lucide-react';
 
-let currentApiBase = '/api';
+// API URL resolution: supports Vercel VITE_API_BASE_URL, local vite proxy, or fallback to port 8050
+const envApiBase = import.meta.env.VITE_API_BASE_URL ? import.meta.env.VITE_API_BASE_URL.replace(/\/$/, '') : '';
+let currentApiBase = envApiBase || '/api';
 
 const apiFetch = async (endpoint, options = {}) => {
   try {
@@ -30,7 +32,7 @@ const apiFetch = async (endpoint, options = {}) => {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return res;
   } catch (err) {
-    if (currentApiBase !== 'http://127.0.0.1:8050/api') {
+    if (!envApiBase && currentApiBase !== 'http://127.0.0.1:8050/api') {
       currentApiBase = 'http://127.0.0.1:8050/api';
       return await fetch(`${currentApiBase}${endpoint}`, options);
     }
