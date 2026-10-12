@@ -22,13 +22,17 @@ import {
   RefreshCw
 } from 'lucide-react';
 
-// API URL resolution: supports Vercel VITE_API_BASE_URL, local vite proxy, or fallback to port 8050
+// Primary production backend on Render
+const PRODUCTION_RENDER_BACKEND = 'https://danfoss-92le.onrender.com/api';
+
+// API URL resolution: environment variable > Vercel reverse-proxy /api > direct Render fallback
 const envApiBase = import.meta.env.VITE_API_BASE_URL ? import.meta.env.VITE_API_BASE_URL.replace(/\/$/, '') : '';
 let currentApiBase = envApiBase || '/api';
 
 const apiFetch = async (endpoint, options = {}) => {
+  const url = `${currentApiBase}${endpoint}`;
   try {
-    const res = await fetch(`${currentApiBase}${endpoint}`, options);
+    const res = await fetch(url, options);
     if (!res.ok) {
       let errMsg = `HTTP ${res.status}`;
       try {
@@ -41,7 +45,22 @@ const apiFetch = async (endpoint, options = {}) => {
     }
     return res;
   } catch (err) {
-    if (!envApiBase && currentApiBase !== 'http://127.0.0.1:8050/api') {
+    // If running on Vercel or localhost and primary URL failed, try direct Render backend
+    if (currentApiBase !== PRODUCTION_RENDER_BACKEND) {
+      console.warn(`[apiFetch] Primary failed (${url}), falling back to direct Render backend:`, err.message);
+      try {
+        const fallbackRes = await fetch(`${PRODUCTION_RENDER_BACKEND}${endpoint}`, options);
+        if (fallbackRes.ok) {
+          currentApiBase = PRODUCTION_RENDER_BACKEND;
+          return fallbackRes;
+        }
+      } catch (fallbackErr) {
+        // fall through to localhost fallback if in dev mode
+      }
+    }
+    
+    // Dev fallback for local VS Code testing
+    if (typeof window !== 'undefined' && window.location.hostname === 'localhost' && currentApiBase !== 'http://127.0.0.1:8050/api') {
       currentApiBase = 'http://127.0.0.1:8050/api';
       return await fetch(`${currentApiBase}${endpoint}`, options);
     }
