@@ -76,26 +76,35 @@ app_state = {
     "iso_forest_metrics": {},
     "rf_classifier_metrics": {},
     "rf_regressor_metrics": {},
-    "contamination": 0.05
+    "contamination": 0.05,
+    "active_file_name": "group3_telemetry.csv (Default)",
+    "is_custom_file": False
 }
 
 def determine_phase(row: pd.Series) -> str:
-    """Classify physical cycle phase based on time and kinematics."""
-    t = row["Time_s"]
-    v = row["Velocity_mps"]
-    s = row["Stroke_mm"]
-    if t < 2.0:
-        return "IDLE_PRE"
-    elif 2.0 <= t < 3.02:
+    """Classify physical cycle phase dynamically based on kinematics & fluid pressure."""
+    v = row.get("Velocity_mps", 0.0)
+    s = row.get("Stroke_mm", 300.0)
+    p = row.get("Pressure_bar", 1.0)
+    t = row.get("Time_s", 0.0)
+    
+    # 1. Fast Down (Rapid descent: high negative velocity)
+    if v < -0.05:
         return "FAST_DOWN"
-    elif 3.02 <= t < 8.02:
+    # 2. Working / Pressing (Controlled descent against workpiece)
+    elif -0.05 <= v < -0.003:
         return "WORKING"
-    elif 8.02 <= t < 10.04:
-        return "HOLDING"
-    elif 10.04 <= t <= 11.261:
+    # 3. Fast Up (Rapid return: high positive velocity)
+    elif v > 0.05:
         return "FAST_UP"
+    # 4. Stationary dwell / Holding / Idle
     else:
-        return "IDLE_POST"
+        if p > 35.0 and s < 180.0:
+            return "HOLDING"
+        elif s >= 240.0:
+            return "IDLE_PRE" if t < 5.0 else "IDLE_POST"
+        else:
+            return "HOLDING"
 
 def enrich_dataset(df: pd.DataFrame) -> pd.DataFrame:
     """Enrich raw telemetry with derived Mechatronics & Fluid Power features."""
@@ -197,9 +206,17 @@ def train_models():
     X_rf_clf = df[["Stroke_mm", "Velocity_mps", "Pressure_bar", "Flow_L_min"]]
     y_rf_clf = df["Phase_Code"]
     
-    X_train_c, X_test_c, y_train_c, y_test_c = train_test_split(
-        X_rf_clf, y_rf_clf, test_size=0.25, random_state=42, stratify=y_rf_clf
-    )
+    # Safe train-test split handling for arbitrary uploaded datasets
+    min_class_count = int(y_rf_clf.value_counts().min()) if len(y_rf_clf) > 0 else 0
+    strat = y_rf_clf if min_class_count >= 2 else None
+    test_sz = 0.25 if len(df) >= 12 else 0.1
+    
+    if len(df) >= 6:
+        X_train_c, X_test_c, y_train_c, y_test_c = train_test_split(
+            X_rf_clf, y_rf_clf, test_size=test_sz, random_state=42, stratify=strat
+        )
+    else:
+        X_train_c, X_test_c, y_train_c, y_test_c = X_rf_clf, X_rf_clf, y_rf_clf, y_rf_clf
     
     rf_clf = RandomForestClassifier(
         n_estimators=100,
@@ -235,9 +252,12 @@ def train_models():
     X_rf_reg = df[["Stroke_mm", "Velocity_mps", "Flow_L_min", "Phase_Code"]]
     y_rf_reg = df["Pressure_bar"]
     
-    X_train_r, X_test_r, y_train_r, y_test_r = train_test_split(
-        X_rf_reg, y_rf_reg, test_size=0.25, random_state=42
-    )
+    if len(df) >= 6:
+        X_train_r, X_test_r, y_train_r, y_test_r = train_test_split(
+            X_rf_reg, y_rf_reg, test_size=test_sz, random_state=42
+        )
+    else:
+        X_train_r, X_test_r, y_train_r, y_test_r = X_rf_reg, X_rf_reg, y_rf_reg, y_rf_reg
     
     rf_reg = RandomForestRegressor(
         n_estimators=100,
@@ -315,6 +335,8 @@ def get_telemetry():
     return {
         "count": len(records),
         "data": records,
+        "active_file_name": app_state.get("active_file_name", "group3_telemetry.csv (Default)"),
+        "is_custom_file": app_state.get("is_custom_file", False),
         "summary": {
             "duration_s": float(df["Time_s"].max()),
             "max_pressure_bar": float(df["Pressure_bar"].max()),
@@ -511,22 +533,95 @@ def simulate_cycle(req: SimulationFaultRequest):
 
 @app.post("/api/upload-csv")
 async def upload_csv(file: UploadFile = File(...)):
-    """Upload new time-series CSV file."""
+    """Upload real time-series CSV file with automatic column normalization and auto-derivation."""
     try:
         df_new = pd.read_csv(file.file)
-        required_cols = {"Time_s", "Position_m", "Stroke_mm", "Velocity_mps", "Pressure_Pa", "Flow_m3ps"}
-        if not required_cols.issubset(df_new.columns):
-            raise HTTPException(
-                status_code=400,
-                detail=f"CSV missing required columns. Must contain: {list(required_cols)}"
-            )
         
+        # 1. Normalize column headers (strip spaces, lowercase, clean underscores)
+        col_map = {}
+        for c in df_new.columns:
+            clean = str(c).strip().lower().replace(" ", "_").replace("-", "_")
+            if clean in ["time_s", "time", "t", "timestamp", "seconds", "sec"]:
+                col_map[c] = "Time_s"
+            elif clean in ["stroke_mm", "stroke", "stroke(mm)", "displacement_mm", "disp_mm"]:
+                col_map[c] = "Stroke_mm"
+            elif clean in ["position_m", "position", "pos_m", "pos"]:
+                col_map[c] = "Position_m"
+            elif clean in ["velocity_mps", "velocity", "velocity_m_s", "speed", "v"]:
+                col_map[c] = "Velocity_mps"
+            elif clean in ["pressure_pa", "pressure_pascals", "press_pa"]:
+                col_map[c] = "Pressure_Pa"
+            elif clean in ["pressure_bar", "pressure", "p_bar", "p_head", "press_bar"]:
+                col_map[c] = "Pressure_bar"
+            elif clean in ["pressure_mpa", "press_mpa"]:
+                col_map[c] = "Pressure_MPa"
+            elif clean in ["flow_m3ps", "flow_m3_s", "flow_m3s", "volumetric_flow"]:
+                col_map[c] = "Flow_m3ps"
+            elif clean in ["flow_l_min", "flow_lpm", "flow", "q"]:
+                col_map[c] = "Flow_L_min"
+                
+        df_new = df_new.rename(columns=col_map)
+        
+        # 2. Derive missing fundamental columns if needed
+        if "Time_s" not in df_new.columns:
+            df_new["Time_s"] = np.arange(len(df_new)) * 0.1
+            
+        if "Stroke_mm" not in df_new.columns and "Position_m" in df_new.columns:
+            df_new["Stroke_mm"] = 300.0 - (df_new["Position_m"].abs() * 1000.0)
+        elif "Stroke_mm" not in df_new.columns:
+            df_new["Stroke_mm"] = 300.0
+            
+        if "Position_m" not in df_new.columns:
+            df_new["Position_m"] = -(300.0 - df_new["Stroke_mm"]) / 1000.0
+            
+        if "Velocity_mps" not in df_new.columns:
+            dt = df_new["Time_s"].diff().fillna(0.1).replace(0, 0.001)
+            df_new["Velocity_mps"] = (df_new["Stroke_mm"].diff().fillna(0.0) / 1000.0) / dt
+            
+        if "Pressure_Pa" not in df_new.columns:
+            if "Pressure_bar" in df_new.columns:
+                df_new["Pressure_Pa"] = df_new["Pressure_bar"] * 1e5
+            elif "Pressure_MPa" in df_new.columns:
+                df_new["Pressure_Pa"] = df_new["Pressure_MPa"] * 1e6
+            else:
+                df_new["Pressure_Pa"] = 100000.0
+                
+        if "Flow_m3ps" not in df_new.columns:
+            if "Flow_L_min" in df_new.columns:
+                df_new["Flow_m3ps"] = (df_new["Flow_L_min"] / 60000.0)
+            else:
+                df_new["Flow_m3ps"] = df_new["Velocity_mps"] * GROUP3_SPECS["area_head_m2"]
+                
         enriched = enrich_dataset(df_new)
         app_state["df"] = enriched
+        app_state["active_file_name"] = file.filename
+        app_state["is_custom_file"] = True
         train_models()
+        
         return {
-            "message": f"Successfully loaded and analyzed {file.filename} with {len(enriched)} rows",
-            "anomalies": int(enriched["Is_Anomaly_IsoForest"].sum())
+            "status": "success",
+            "message": f"Successfully loaded '{file.filename}' ({len(enriched)} data points). All models and graphs updated!",
+            "filename": file.filename,
+            "rows": len(enriched),
+            "anomalies": int(enriched["Is_Anomaly_IsoForest"].sum()),
+            "duration_s": float(enriched["Time_s"].max())
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Failed to process CSV: {str(e)}")
+
+@app.post("/api/reset-default-csv")
+def reset_default_csv():
+    """Reset active dataset back to default Group 3 simulation telemetry."""
+    if os.path.exists(DEFAULT_CSV_PATH):
+        df_raw = pd.read_csv(DEFAULT_CSV_PATH)
+        app_state["df"] = enrich_dataset(df_raw)
+        app_state["active_file_name"] = "group3_telemetry.csv (Default)"
+        app_state["is_custom_file"] = False
+        train_models()
+        return {
+            "status": "success",
+            "message": "Reset to default Group 3 telemetry dataset",
+            "filename": "group3_telemetry.csv (Default)",
+            "rows": len(app_state["df"])
+        }
+    raise HTTPException(status_code=404, detail="Default CSV not found")

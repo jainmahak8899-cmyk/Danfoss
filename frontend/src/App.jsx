@@ -394,9 +394,21 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [telemetryData, setTelemetryData] = useState([]);
   const [telemetrySummary, setTelemetrySummary] = useState(null);
+  const [activeFileName, setActiveFileName] = useState('group3_telemetry.csv (Default)');
+  const [isCustomFile, setIsCustomFile] = useState(false);
+  const [uploadToast, setUploadToast] = useState(null);
+  const [isUploading, setIsUploading] = useState(false);
   const [systemSpecs, setSystemSpecs] = useState(null);
   const [modelSummary, setModelSummary] = useState(null);
   const [loading, setLoading] = useState(true);
+
+  // Auto-dismiss upload toast after 6 seconds
+  useEffect(() => {
+    if (uploadToast) {
+      const timer = setTimeout(() => setUploadToast(null), 6000);
+      return () => clearTimeout(timer);
+    }
+  }, [uploadToast]);
 
   // Playback state
   const [isPlaying, setIsPlaying] = useState(false);
@@ -441,6 +453,8 @@ export default function App() {
 
       setTelemetryData(telemetry.data || []);
       setTelemetrySummary(telemetry.summary || null);
+      setActiveFileName(telemetry.active_file_name || 'group3_telemetry.csv (Default)');
+      setIsCustomFile(telemetry.is_custom_file || false);
       setSystemSpecs(specs);
       setModelSummary(models);
       if (telemetry.data && telemetry.data.length > 0) {
@@ -551,8 +565,9 @@ export default function App() {
 
   // Handle CSV Upload
   const handleFileUpload = async e => {
-    const file = e.target.files[0];
+    const file = e.target.files?.[0];
     if (!file) return;
+    setIsUploading(true);
     const formData = new FormData();
     formData.append('file', file);
     try {
@@ -561,10 +576,42 @@ export default function App() {
         body: formData
       });
       const resData = await res.json();
-      alert(resData.message || 'File uploaded successfully!');
-      fetchInitialData();
+      if (!res.ok) throw new Error(resData.detail || 'Upload failed');
+      
+      setUploadToast({
+        type: 'success',
+        msg: resData.message || `Loaded '${file.name}' successfully! All models & graphs updated.`
+      });
+      await fetchInitialData();
     } catch (err) {
-      alert('Upload failed: ' + err.message);
+      setUploadToast({
+        type: 'error',
+        msg: `Upload Error: ${err.message}`
+      });
+    } finally {
+      setIsUploading(false);
+      if (e.target) e.target.value = '';
+    }
+  };
+
+  // Reset to default baseline simulation
+  const handleResetDefault = async () => {
+    setIsUploading(true);
+    try {
+      const res = await apiFetch('/reset-default-csv', { method: 'POST' });
+      const resData = await res.json();
+      setUploadToast({
+        type: 'info',
+        msg: 'Restored baseline Group 3 simulation telemetry.'
+      });
+      await fetchInitialData();
+    } catch (err) {
+      setUploadToast({
+        type: 'error',
+        msg: `Reset Error: ${err.message}`
+      });
+    } finally {
+      setIsUploading(false);
     }
   };
 
@@ -697,74 +744,123 @@ export default function App() {
             </span>
           </div>
 
-          {/* Interactive Playback Scrubber */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '16px', backgroundColor: '#f8fafc', padding: '6px 14px', borderRadius: '10px', border: '1px solid #e2e8f0' }}>
-            <button
-              onClick={() => setIsPlaying(!isPlaying)}
-              style={{
-                width: '32px',
-                height: '32px',
-                borderRadius: '50%',
-                backgroundColor: isPlaying ? '#d92d20' : '#0284c7',
-                border: 'none',
-                color: '#fff',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                cursor: 'pointer'
-              }}
-              title={isPlaying ? 'Pause Cycle' : 'Play Cycle'}
-            >
-              {isPlaying ? <Pause size={14} /> : <Play size={14} style={{ marginLeft: '2px' }} />}
-            </button>
-
-            <button
-              onClick={() => { setIsPlaying(false); setCurrentTime(0.0); }}
-              style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer' }}
-              title="Reset to 0s"
-            >
-              <RotateCcw size={14} />
-            </button>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', width: '180px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: '#64748b', fontFamily: 'JetBrains Mono' }}>
-                <span>t = {currentTime.toFixed(2)}s</span>
-                <span>13.99s</span>
-              </div>
-              <input
-                type="range"
-                min="0"
-                max={telemetryData.length > 0 ? telemetryData[telemetryData.length - 1].Time_s : 14}
-                step="0.05"
-                value={currentTime}
-                onChange={e => {
-                  setIsPlaying(false);
-                  setCurrentTime(parseFloat(e.target.value));
+          {/* Right Header Action Controls: Scrubber & Real CSV Upload */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            {/* Interactive Playback Scrubber */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '14px', backgroundColor: '#f8fafc', padding: '6px 12px', borderRadius: '10px', border: '1px solid #e2e8f0' }}>
+              <button
+                onClick={() => setIsPlaying(!isPlaying)}
+                style={{
+                  width: '30px',
+                  height: '30px',
+                  borderRadius: '50%',
+                  backgroundColor: isPlaying ? '#d92d20' : '#0284c7',
+                  border: 'none',
+                  color: '#fff',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer'
                 }}
-              />
+                title={isPlaying ? 'Pause Cycle' : 'Play Cycle'}
+              >
+                {isPlaying ? <Pause size={13} /> : <Play size={13} style={{ marginLeft: '2px' }} />}
+              </button>
+
+              <button
+                onClick={() => { setIsPlaying(false); setCurrentTime(0.0); }}
+                style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer' }}
+                title="Reset to 0s"
+              >
+                <RotateCcw size={14} />
+              </button>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', width: '160px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: '#64748b', fontFamily: 'JetBrains Mono' }}>
+                  <span>t = {currentTime.toFixed(2)}s</span>
+                  <span>{telemetryData.length > 0 ? `${telemetryData[telemetryData.length - 1].Time_s.toFixed(2)}s` : '14.00s'}</span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max={telemetryData.length > 0 ? telemetryData[telemetryData.length - 1].Time_s : 14}
+                  step="0.05"
+                  value={currentTime}
+                  onChange={e => {
+                    setIsPlaying(false);
+                    setCurrentTime(parseFloat(e.target.value));
+                  }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                {[1, 2].map(speed => (
+                  <button
+                    key={speed}
+                    onClick={() => setPlaybackSpeed(speed)}
+                    style={{
+                      padding: '2px 5px',
+                      borderRadius: '4px',
+                      border: '1px solid',
+                      borderColor: playbackSpeed === speed ? '#cbd5e1' : 'transparent',
+                      backgroundColor: playbackSpeed === speed ? '#ffffff' : 'transparent',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      color: playbackSpeed === speed ? '#0f172a' : '#94a3b8',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    {speed}x
+                  </button>
+                ))}
+              </div>
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-              {[1, 2].map(speed => (
-                <button
-                  key={speed}
-                  onClick={() => setPlaybackSpeed(speed)}
-                  style={{
-                    padding: '2px 6px',
-                    borderRadius: '4px',
-                    border: '1px solid',
-                    borderColor: playbackSpeed === speed ? '#cbd5e1' : 'transparent',
-                    backgroundColor: playbackSpeed === speed ? '#ffffff' : 'transparent',
-                    fontSize: '11px',
-                    fontWeight: 600,
-                    color: playbackSpeed === speed ? '#0f172a' : '#94a3b8',
-                    cursor: 'pointer'
-                  }}
-                >
-                  {speed}x
-                </button>
-              ))}
-            </div>
+            {/* Quick Header Real CSV Upload Trigger */}
+            <label style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '7px 14px',
+              borderRadius: '8px',
+              backgroundColor: isCustomFile ? '#0284c7' : '#0f172a',
+              color: '#ffffff',
+              fontSize: '12px',
+              fontWeight: 600,
+              cursor: isUploading ? 'not-allowed' : 'pointer',
+              transition: 'all 0.15s ease',
+              boxShadow: 'var(--shadow-sm)',
+              whiteSpace: 'nowrap'
+            }}>
+              <Upload size={14} />
+              {isUploading ? 'Loading...' : isCustomFile ? 'Replace CSV' : 'Upload Real CSV'}
+              <input type="file" accept=".csv" onChange={handleFileUpload} disabled={isUploading} style={{ display: 'none' }} />
+            </label>
+
+            {isCustomFile && (
+              <button
+                onClick={handleResetDefault}
+                disabled={isUploading}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  padding: '7px 10px',
+                  borderRadius: '8px',
+                  backgroundColor: '#ffffff',
+                  border: '1px solid #cbd5e1',
+                  color: '#475569',
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  cursor: isUploading ? 'not-allowed' : 'pointer',
+                  whiteSpace: 'nowrap'
+                }}
+                title="Reset to default Group 3 baseline simulation"
+              >
+                <RotateCcw size={12} />
+                Reset
+              </button>
+            )}
           </div>
         </header>
 
@@ -775,6 +871,99 @@ export default function App() {
           {/* --------------------------------------------------------- */}
           {activeTab === 'dashboard' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+              {/* Active Dataset Status & Real Data Quick Upload Banner */}
+              <div style={{
+                backgroundColor: isCustomFile ? '#f0fdf4' : '#ffffff',
+                border: '1px solid',
+                borderColor: isCustomFile ? '#86efac' : '#e2e8f0',
+                borderRadius: '12px',
+                padding: '14px 18px',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                boxShadow: 'var(--shadow-sm)'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                  <div style={{
+                    width: '38px',
+                    height: '38px',
+                    borderRadius: '8px',
+                    backgroundColor: isCustomFile ? '#dcfce7' : '#e0f2fe',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: isCustomFile ? '#15803d' : '#0284c7'
+                  }}>
+                    <Database size={20} />
+                  </div>
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ fontSize: '13px', fontWeight: 700, color: '#0f172a' }}>
+                        {isCustomFile ? 'Custom Machine Telemetry Loaded:' : 'Group 3 Baseline Simulation Telemetry:'}
+                      </span>
+                      <code style={{
+                        fontSize: '11px',
+                        backgroundColor: isCustomFile ? '#bbf7d0' : '#f1f5f9',
+                        color: isCustomFile ? '#14532d' : '#0f172a',
+                        padding: '2px 8px',
+                        borderRadius: '4px',
+                        fontWeight: 600
+                      }}>
+                        {activeFileName}
+                      </code>
+                    </div>
+                    <span style={{ fontSize: '11px', color: '#64748b', marginTop: '3px', display: 'block' }}>
+                      {telemetryData.length} data rows | Cycle Duration: {telemetrySummary?.duration_s?.toFixed(2) || '0.00'}s | 
+                      Peak Pressure: {telemetrySummary?.max_pressure_bar?.toFixed(1) || '0.0'} bar | 
+                      All 4 graphs, Digital Twin kinematics, and ML models adapt dynamically to this dataset.
+                    </span>
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <label style={{
+                    padding: '8px 16px',
+                    borderRadius: '8px',
+                    backgroundColor: '#0f172a',
+                    color: '#ffffff',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    cursor: isUploading ? 'not-allowed' : 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    boxShadow: 'var(--shadow-sm)'
+                  }}>
+                    <Upload size={14} />
+                    {isUploading ? 'Processing CSV...' : 'Upload Real CSV'}
+                    <input type="file" accept=".csv" onChange={handleFileUpload} disabled={isUploading} style={{ display: 'none' }} />
+                  </label>
+
+                  {isCustomFile && (
+                    <button
+                      onClick={handleResetDefault}
+                      disabled={isUploading}
+                      style={{
+                        padding: '8px 12px',
+                        borderRadius: '8px',
+                        backgroundColor: '#ffffff',
+                        border: '1px solid #cbd5e1',
+                        color: '#334155',
+                        fontSize: '12px',
+                        fontWeight: 600,
+                        cursor: isUploading ? 'not-allowed' : 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px'
+                      }}
+                    >
+                      <RotateCcw size={13} />
+                      Reset to Default
+                    </button>
+                  )}
+                </div>
+              </div>
+
               {/* Top Stats Cards */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px' }}>
                 <div style={{ backgroundColor: '#ffffff', borderRadius: '10px', padding: '16px', border: '1px solid #e2e8f0', boxShadow: 'var(--shadow-sm)' }}>
@@ -1567,6 +1756,36 @@ export default function App() {
             </div>
           )}
         </div>
+
+        {/* Floating Upload Toast Notification */}
+        {uploadToast && (
+          <div style={{
+            position: 'fixed',
+            bottom: '24px',
+            right: '24px',
+            backgroundColor: uploadToast.type === 'error' ? '#ef4444' : uploadToast.type === 'info' ? '#0284c7' : '#10b981',
+            color: '#ffffff',
+            padding: '12px 18px',
+            borderRadius: '10px',
+            boxShadow: 'var(--shadow-lg)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px',
+            fontSize: '13px',
+            fontWeight: 500,
+            zIndex: 9999,
+            animation: 'fadeIn 0.2s ease-out'
+          }}>
+            {uploadToast.type === 'error' ? <AlertTriangle size={16} /> : <CheckCircle2 size={16} />}
+            <span>{uploadToast.msg}</span>
+            <button
+              onClick={() => setUploadToast(null)}
+              style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', marginLeft: '8px', fontSize: '15px' }}
+            >
+              &times;
+            </button>
+          </div>
+        )}
       </main>
     </div>
   );
