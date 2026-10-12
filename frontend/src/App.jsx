@@ -62,23 +62,45 @@ const SVGTelemetryChart = ({
     return <div style={{ height, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94a3b8' }}>No data available</div>;
   }
 
-  const xVals = data.map(d => d[xKey]);
-  const yVals = data.map(d => d[yKey]);
-  const y2Vals = yKey2 ? data.map(d => d[yKey2]) : [];
-
-  const xMin = Math.min(...xVals);
-  const xMax = Math.max(...xVals);
-  
-  let allY = [...yVals];
-  if (yKey2) allY = [...allY, ...y2Vals];
-  let yMin = Math.min(...allY);
-  let yMax = Math.max(...allY);
-  if (yMin === yMax) {
-    yMin -= 1;
-    yMax += 1;
+  const cleanData = data.filter(d => d && typeof d === 'object');
+  if (cleanData.length === 0) {
+    return <div style={{ height, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94a3b8' }}>No valid telemetry points</div>;
   }
+
+  let xMin = Infinity, xMax = -Infinity;
+  let yMin = Infinity, yMax = -Infinity;
+
+  cleanData.forEach(d => {
+    const x = Number(d[xKey]);
+    const y1 = Number(d[yKey]);
+    if (!isNaN(x)) {
+      if (x < xMin) xMin = x;
+      if (x > xMax) xMax = x;
+    }
+    if (!isNaN(y1)) {
+      if (y1 < yMin) yMin = y1;
+      if (y1 > yMax) yMax = y1;
+    }
+    if (yKey2 && d[yKey2] !== undefined) {
+      const y2 = Number(d[yKey2]);
+      if (!isNaN(y2)) {
+        if (y2 < yMin) yMin = y2;
+        if (y2 > yMax) yMax = y2;
+      }
+    }
+  });
+
+  if (!isFinite(xMin) || !isFinite(xMax) || xMin === xMax) {
+    xMin = 0;
+    xMax = Math.max(1, xMax !== -Infinity ? xMax : 14);
+  }
+  if (!isFinite(yMin) || !isFinite(yMax) || yMin === yMax) {
+    yMin = 0;
+    yMax = Math.max(1, (yMax !== -Infinity ? yMax : 10) + 1);
+  }
+
   const yRange = yMax - yMin;
-  const yPad = yRange * 0.1;
+  const yPad = Math.max(0.1, yRange * 0.1);
   const adjYMin = yMin - yPad;
   const adjYMax = yMax + yPad;
 
@@ -87,11 +109,19 @@ const SVGTelemetryChart = ({
   const innerW = width - padding.left - padding.right;
   const innerH = height - padding.top - padding.bottom;
 
-  const getX = val => padding.left + ((val - xMin) / (xMax - xMin || 1)) * innerW;
-  const getY = val => padding.top + innerH - ((val - adjYMin) / (adjYMax - adjYMin || 1)) * innerH;
+  const getX = val => {
+    const n = Number(val);
+    const safeVal = isNaN(n) ? 0 : n;
+    return padding.left + ((safeVal - xMin) / (xMax - xMin || 1)) * innerW;
+  };
+  const getY = val => {
+    const n = Number(val);
+    const safeVal = isNaN(n) ? adjYMin : n;
+    return padding.top + innerH - ((safeVal - adjYMin) / (adjYMax - adjYMin || 1)) * innerH;
+  };
 
-  const points1 = data.map(d => `${getX(d[xKey])},${getY(d[yKey])}`).join(' ');
-  const points2 = yKey2 ? data.map(d => `${getX(d[xKey])},${getY(d[yKey2])}`).join(' ') : null;
+  const points1 = cleanData.map(d => `${getX(d[xKey])},${getY(d[yKey])}`).join(' ');
+  const points2 = yKey2 ? cleanData.map(d => `${getX(d[xKey])},${getY(d[yKey2])}`).join(' ') : null;
 
   const currentX = currentTime !== null ? getX(currentTime) : null;
 
