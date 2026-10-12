@@ -29,7 +29,16 @@ let currentApiBase = envApiBase || '/api';
 const apiFetch = async (endpoint, options = {}) => {
   try {
     const res = await fetch(`${currentApiBase}${endpoint}`, options);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) {
+      let errMsg = `HTTP ${res.status}`;
+      try {
+        const errJson = await res.json();
+        if (errJson && errJson.detail) errMsg = errJson.detail;
+      } catch (e) {
+        // ignore non-json error responses
+      }
+      throw new Error(errMsg);
+    }
     return res;
   } catch (err) {
     if (!envApiBase && currentApiBase !== 'http://127.0.0.1:8050/api') {
